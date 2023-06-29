@@ -9,11 +9,11 @@ ml-collections
 numpy
 optax
 portpicker
-protobuf==3.20.3
+protobuf>=3.20.3
 pylint
 pytest
-sentencepiece==0.1.97
-tensorflow
+sentencepiece>=0.1.97
+tensorflow-cpu
 tensorflow-datasets
 tensorboard-plugin-profile
 tensorflow-text
