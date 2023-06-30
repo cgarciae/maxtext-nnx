@@ -200,7 +200,7 @@ class DenseGeneral(nnx.Module):
     self.features_in = features_in
     self.features_out = features_out
     self.axis = axis
-    self.config = config
+    config = config
     self.dtype = dtype
     self.kernel_init = kernel_init
     self.kernel_axes = kernel_axes
@@ -232,14 +232,14 @@ class DenseGeneral(nnx.Module):
     Returns:
       The transformed input.
     """
-    cfg = self.config
+    config = config
     axis = _canonicalize_tuple(self.axis)
     inputs = jnp.asarray(inputs, self.dtype)
     axis = _normalize_axes(axis, inputs.ndim)
     kernel = jnp.asarray(self.kernel, self.dtype)
     contract_ind = tuple(range(0, len(axis)))
 
-    if not cfg.use_int8_training:
+    if not config.use_int8_training:
       return lax.dot_general(inputs, kernel, ((axis, contract_ind), ((), ())))
     else:
       aqt_cfg = aqt_config.fully_quantized(bits=8, use_fwd_quant=True)
@@ -289,7 +289,7 @@ class MultiHeadDotProductAttention(nnx.Module):
 
   def __init__(
     self,
-    embed_dim: int,
+    emb_dim: int,
     num_heads: int,
     head_dim: int,
     *,
@@ -300,10 +300,10 @@ class MultiHeadDotProductAttention(nnx.Module):
     float32_logits: bool = False,  # computes logits in float32 for stability.
     ctx: nnx.Context,
   ):
-    self.embed_dim = embed_dim
+    self.emb_dim = emb_dim
     self.num_heads = num_heads
     self.head_dim = head_dim
-    self.config = config
+    config = config
     self.dtype = dtype
     self.dropout_rate = dropout_rate
     self.kernel_init = kernel_init
@@ -320,7 +320,7 @@ class MultiHeadDotProductAttention(nnx.Module):
 
     projection = functools.partial(
       DenseGeneral,
-      features_in=self.embed_dim,
+      features_in=self.emb_dim,
       features_out=(self.num_heads, self.head_dim),
       axis=-1,
       kernel_axes=('embed', 'heads', 'kv'),
@@ -334,7 +334,7 @@ class MultiHeadDotProductAttention(nnx.Module):
     self.value = projection(kernel_init=self.kernel_init)
     self.out = DenseGeneral(
       features_in=(self.num_heads, self.head_dim),
-      features_out=self.embed_dim,  # output dim is set to the input dim.
+      features_out=self.emb_dim,  # output dim is set to the input dim.
       axis=(-2, -1),
       kernel_init=self.kernel_init,
       kernel_axes=('heads', 'kv', 'embed'),
@@ -514,7 +514,7 @@ class MlpBlock(nnx.Module):
   """
   def __init__(
     self,
-    embed_dim: int,
+    emb_dim: int,
     *,
     config: Config,
     intermediate_dim: int = 2048,
@@ -524,8 +524,8 @@ class MlpBlock(nnx.Module):
     dtype: Any = jnp.float32,
     ctx: nnx.Context,
   ):
-    self.config = config
-    self.embed_dim = embed_dim
+    config = config
+    self.emb_dim = emb_dim
     self.intermediate_dim = intermediate_dim
     self.activations = tuple(
       _convert_to_activation_function(a) for a in activations
@@ -539,7 +539,7 @@ class MlpBlock(nnx.Module):
     for idx in range(len(self.activations)):
       name = 'wi' if len(self.activations) == 1 else f'wi_{idx}'
       dense = DenseGeneral(
-        self.embed_dim if idx == 0 else self.intermediate_dim,
+        self.emb_dim if idx == 0 else self.intermediate_dim,
         self.intermediate_dim,
         dtype=self.dtype,
         kernel_init=self.kernel_init,
@@ -553,7 +553,7 @@ class MlpBlock(nnx.Module):
     self.dense_names = tuple(dense_names)
     self.wo = DenseGeneral(
       self.intermediate_dim,
-      self.embed_dim,
+      self.emb_dim,
       dtype=self.dtype,
       kernel_init=self.kernel_init,
       kernel_axes=('mlp', 'embed'),
@@ -821,11 +821,13 @@ class RelativePositionBiases(nnx.Module):
 #------------------------------------------------------------------------------
 # Mask-making utility functions.
 #------------------------------------------------------------------------------
-def make_attention_mask(query_input: Array,
-                        key_input: Array,
-                        pairwise_fn: Callable = jnp.multiply,
-                        extra_batch_dims: int = 0,
-                        dtype: DType = jnp.float32) -> Array:
+def make_attention_mask(
+  query_input: Array,
+  key_input: Array,
+  pairwise_fn: Callable = jnp.multiply,
+  extra_batch_dims: int = 0,
+  dtype: DType = jnp.float32,
+) -> Array:
   """Mask-making helper for attention weights.
 
   In case of 1d inputs (i.e., `[batch, len_q]`, `[batch, len_kv]`, the
@@ -845,10 +847,11 @@ def make_attention_mask(query_input: Array,
   """
   # [batch, len_q, len_kv]
   mask = pairwise_fn(
-      # [batch, len_q] -> [batch, len_q, 1]
-      jnp.expand_dims(query_input, axis=-1),
-      # [batch, len_q] -> [batch, 1, len_kv]
-      jnp.expand_dims(key_input, axis=-2))
+    # [batch, len_q] -> [batch, len_q, 1]
+    jnp.expand_dims(query_input, axis=-1),
+    # [batch, len_q] -> [batch, 1, len_kv]
+    jnp.expand_dims(key_input, axis=-2)
+  )
 
   # [batch, 1, len_q, len_kv]. This creates the head dim.
   mask = jnp.expand_dims(mask, axis=-3)
@@ -1037,57 +1040,58 @@ class DecoderLayer(nnx.Module):
   """Transformer decoder layer that attends to the encoder."""
 
   def __init__(self, config: Config, *, ctx: nnx.Context):
-    self.config = config
+    config = config
 
     self.self_attention = MultiHeadDotProductAttention(
-      embed_dim=self.config.embed_dim,
-      num_heads=self.config.num_heads,
-      head_dim=self.config.head_dim,
-      dtype=self.config.dtype,
-      dropout_rate=self.config.dropout_rate,
-      config=self.config,
+      emb_dim=config.emb_dim,
+      num_heads=config.num_heads,
+      head_dim=config.head_dim,
+      dtype=config.dtype,
+      dropout_rate=config.dropout_rate,
+      config=config,
       ctx=ctx,
     )
     self.pre_self_attention_layer_norm = LayerNorm(
-      self.config.embed_dim,
-      dtype=self.config.dtype, 
+      config.emb_dim,
+      dtype=config.dtype, 
       kernel_axes=('embed',),
       ctx=ctx,
     )
     self.relpos_bias = RelativePositionBiases(
       num_buckets=32,
       max_distance=128,
-      num_heads=self.config.num_heads,
-      dtype=self.config.dtype,
+      num_heads=config.num_heads,
+      dtype=config.dtype,
       embedding_init=nn.initializers.variance_scaling(
         1.0, 'fan_avg', 'uniform'
       ),
     )
     self.mlp = MlpBlock(
-      self.config.embed_dim,
-      intermediate_dim=self.config.mlp_dim,
-      activations=self.config.mlp_activations,
-      intermediate_dropout_rate=self.config.dropout_rate,
-      dtype=self.config.dtype,
-      config=self.config,
+      config.emb_dim,
+      intermediate_dim=config.mlp_dim,
+      activations=config.mlp_activations,
+      intermediate_dropout_rate=config.dropout_rate,
+      dtype=config.dtype,
+      config=config,
       ctx=ctx,
     )
     self.dropout = nn.Dropout(
-      rate=self.config.dropout_rate, 
+      rate=config.dropout_rate, 
       broadcast_dims=(-2,),
     )
 
   def __call__(
     self,
-    inputs,
-    decoder_mask,
-    deterministic,
-    decode,
+    inputs: Array,
+    _scan_axes,
+    decoder_mask: Optional[Array],
+    deterministic: bool,
+    decode: bool,
     max_decode_length,
     *,
     ctx: nnx.Context,
   ):
-    cfg = self.config
+    config = config
 
     # Relative position embedding as attention biases.
     l = max_decode_length if decode and max_decode_length else inputs.shape[-2]
@@ -1124,15 +1128,12 @@ class DecoderLayer(nnx.Module):
     layer_output = next_layer_addition_dropped_out + inputs
     layer_output = nn.with_logical_constraint(layer_output, ('activation_batch', 'activation_length', 'activation_embed'))
 
-    if cfg.record_internal_nn_metrics:
+    if config.record_internal_nn_metrics:
       self.sow('intermediates', 'activation_mean', jnp.mean(layer_output))
       self.sow('intermediates', 'activation_stdev', jnp.std(layer_output))
       self.sow('intermediates', 'activation_fraction_zero', jnp.sum(layer_output==0) / jnp.size(layer_output))
-
-    if cfg.scan_layers:
-      return layer_output, None
-    else:
-      return layer_output
+    
+    return layer_output, None
 
 
 
@@ -1142,123 +1143,132 @@ class Decoder(nnx.Module):
     self, 
     config: Config, 
     *, 
-    shared_embedding: nn.Module, 
+    shared_embedding: nnx.Module, 
     ctx: nnx.Context
   ):
     self.config = config
     self.shared_embedding = shared_embedding
+
+    params_spec = config.param_scan_axis
+    cache_spec = 0
     
-    self.dropout = nn.Dropout(
-      rate=self.config.dropout_rate, broadcast_dims=(-2,)
+    self.dropout = nnx.Dropout(
+      rate=config.dropout_rate, broadcast_dims=(-2,)
     )
-  
-
-  def __call__(self,
-               decoder_input_tokens,
-               decoder_positions=None,
-               decoder_mask=None,
-               deterministic=False,
-               decode=False,
-               max_decode_length=None):
-    cfg = self.config
-    assert decoder_input_tokens.ndim == 2  # [batch, len]
-
-    # [batch, length] -> [batch, length, emb_dim]
-    y = self.shared_embedding(decoder_input_tokens.astype('int32'))
-    y = self.dropout(y, deterministic=deterministic).astype(cfg.dtype)
 
     BlockLayer = DecoderLayer
 
-    if cfg.remat_policy != 'none':
-      if cfg.remat_policy == 'minimal':
+    if config.remat_policy != 'none':
+      if config.remat_policy == 'minimal':
         policy = jax.checkpoint_policies.checkpoint_dots_with_no_batch_dims
-      elif cfg.remat_policy == 'proj':
+      elif config.remat_policy == 'proj':
         policy = jax.checkpoint_policies.save_only_these_names(
             'query_proj', 'value_proj', 'key_proj'
         )
       else:
-        assert cfg.remat_policy == 'full', "Remat policy needs to be on list of remat policies"
+        assert config.remat_policy == 'full', "Remat policy needs to be on list of remat policies"
         policy = None
-      BlockLayer = nn.remat(  # pylint: disable=invalid-name
-          BlockLayer,
-          prevent_cse=not cfg.scan_layers,
-          policy=policy,
-          static_argnums=(-1, -2, -3, -4))
-    if cfg.scan_layers:
-      initializing = self.is_mutable_collection('params')
-      params_spec = (
-          cfg.param_scan_axis if initializing else ScanIn(cfg.param_scan_axis))
-      cache_spec = 0
-      y, _ = nn.scan(
-          BlockLayer,
-          variable_axes={
-              'params': params_spec,
-              'cache': cache_spec,
-              'intermediates': 0
-          },
-          split_rngs={
-              'params': True,
-              'dropout': cfg.enable_dropout,
-              'aqt': cfg.use_int8_training
-          },
-          in_axes=(nn.broadcast, nn.broadcast, nn.broadcast,
-                   nn.broadcast),
-          length=cfg.num_decoder_layers,
-          metadata_params={nn.PARTITION_NAME: 'layers'})(
-              config=cfg,
-              name='decoder')(y, decoder_mask,
-                              deterministic, decode, max_decode_length)
-    else:
-      for lyr in range(cfg.num_decoder_layers):
-        # [batch, length, emb_dim] -> [batch, length, emb_dim]
-        y = BlockLayer(
-            config=cfg, name=f'layers_{lyr}')(
-                y,
-                decoder_mask,
-                deterministic,
-                decode,
-                max_decode_length)
 
-    y = LayerNorm(dtype=cfg.dtype, name='decoder_norm', kernel_axes = ('embed',))(y)
-    y = nn.Dropout(
-        rate=cfg.dropout_rate, broadcast_dims=(-2,))(
-            y, deterministic=deterministic)
+      BlockLayer = nnx.remat(BlockLayer, policy=policy)
+
+    if config.scan_layers:
+      self.layers = nnx.scan(
+        BlockLayer,
+        variable_axes={
+          'params': params_spec,
+          'cache': cache_spec,
+          'intermediates': 0
+        },
+        split_rngs={
+          'params': True,
+          'dropout': config.enable_dropout,
+          'aqt': config.use_int8_training,
+        },
+        in_axes=(nn.broadcast, nn.broadcast, nn.broadcast, nn.broadcast),
+        length=config.num_decoder_layers,
+        metadata_params={nn.PARTITION_NAME: 'layers'}
+      )(config, ctx=ctx)
+    else:
+      self.layers = nnx.Sequence(
+        BlockLayer(config, ctx=ctx)
+        for _ in range(config.num_decoder_layers)
+      )
+    self.decoder_norm = LayerNorm(
+      config.emb_dim, dtype=config.dtype, kernel_axes=('embed',), ctx=ctx
+    )
+    if config.logits_via_embedding:
+      self.logits_dense = DenseGeneral(
+        config.emb_dim,
+        config.vocab_size,
+        dtype=jnp.float32,  # Use float32 for stabiliity.
+        kernel_axes=('embed', 'vocab'),
+        config=config,
+        ctx=ctx,
+      )
+    else:
+      self.logits_dense = None
+  
+
+  def __call__(
+      self,
+      decoder_input_tokens,
+      decoder_positions=None,
+      decoder_mask=None,
+      deterministic=False,
+      decode=False,
+      max_decode_length=None,
+      *,
+      ctx: nnx.Context,
+    ):
+    assert decoder_input_tokens.ndim == 2  # [batch, len]
+    config = self.config 
+
+    # [batch, length] -> [batch, length, emb_dim]
+    y = self.shared_embedding(decoder_input_tokens.astype('int32'))
+    y = self.dropout(y, deterministic=deterministic).astype(config.dtype)
+    
+    y, _ = self.layers(
+      y, decoder_mask, deterministic, decode, max_decode_length
+    )
+
+    y = self.decoder_norm(y)
+    y = self.dropout(y, deterministic=deterministic, ctx=ctx)
 
     # [batch, length, emb_dim] -> [batch, length, vocab_size]
-    if cfg.logits_via_embedding:
+    if self.config.logits_via_embedding:
       # Use the transpose of embedding matrix for logit transform.
       logits = self.shared_embedding.attend(y)
       # Correctly normalize pre-softmax logits for this shared case.
       logits = logits / jnp.sqrt(y.shape[-1])
     else:
-      logits = DenseGeneral(
-          cfg.vocab_size,
-          dtype=jnp.float32,  # Use float32 for stabiliity.
-          kernel_axes=('embed', 'vocab'),
-          name='logits_dense',
-          config=cfg)(
-              y)
+      assert self.logits_dense is not None
+      logits = self.logits_dense(y, ctx=ctx)
     logits = nn.with_logical_constraint(logits, ('activation_batch', 'activation_length', 'activation_vocab'))
     return logits
 
 
-class Transformer(nn.Module):
+class Transformer(nnx.Module):
   """An decoder-only Transformer model."""
   # pylint: disable=attribute-defined-outside-init
-  config: Config
 
-  def setup(self):
-    """Initialize shared_embedding, decoder"""
-    cfg = self.config
+  def __init__(
+    self,
+    config: Config,
+    *,
+    ctx: nnx.Context
+  ):
+    self.config = config
     self.shared_embedding = Embed(
-        num_embeddings=cfg.vocab_size,
-        features=cfg.emb_dim,
-        dtype=cfg.dtype,
-        attend_dtype=jnp.float32,  # for logit training stability
-        embedding_init=nn.initializers.normal(stddev=1.0),
-        name='token_embedder')
-
-    self.decoder = Decoder(config=cfg, shared_embedding=self.shared_embedding)
+      num_embeddings=config.vocab_size,
+      features=config.emb_dim,
+      dtype=config.dtype,
+      attend_dtype=jnp.float32,  # for logit training stability
+      embedding_init=nn.initializers.normal(stddev=1.0),
+      ctx=ctx,
+    )
+    self.decoder = Decoder(
+      config=config, shared_embedding=self.shared_embedding, ctx=ctx
+    )
 
   def __call__(
       self,
@@ -1268,9 +1278,12 @@ class Transformer(nn.Module):
       decoder_positions=None,
       enable_dropout=True,
       decode=False,
-      max_decode_length=None):
+      max_decode_length=None,
+      *,
+      ctx: nnx.Context,
+    ):
     """Applies Transformer decoder-branch on encoded-input and target."""
-    cfg = self.config
+    config = self.config
 
     # Make padding attention masks.
     if decode:
@@ -1279,9 +1292,10 @@ class Transformer(nn.Module):
       decoder_mask = None
     else:
       decoder_mask = make_decoder_mask(
-          decoder_target_tokens=decoder_target_tokens,
-          dtype=cfg.dtype,
-          decoder_segment_ids=decoder_segment_ids)
+        decoder_target_tokens=decoder_target_tokens,
+        dtype=config.dtype,
+        decoder_segment_ids=decoder_segment_ids
+      )
 
     # Add segmentation block-diagonal attention masks if using segmented data.
     if decoder_segment_ids is not None:
@@ -1291,10 +1305,12 @@ class Transformer(nn.Module):
             '`encoder_segment_ids` was passed to `Transformer.decode`.')
 
     logits = self.decoder(
-        decoder_input_tokens=decoder_input_tokens,
-        decoder_positions=decoder_positions,
-        decoder_mask=decoder_mask,
-        deterministic=not enable_dropout,
-        decode=decode,
-        max_decode_length=max_decode_length)
+      decoder_input_tokens=decoder_input_tokens,
+      decoder_positions=decoder_positions,
+      decoder_mask=decoder_mask,
+      deterministic=not enable_dropout,
+      decode=decode,
+      max_decode_length=max_decode_length,
+      ctx=ctx,
+    )
     return logits
