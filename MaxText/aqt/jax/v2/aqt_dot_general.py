@@ -17,7 +17,7 @@
 
 import copy
 from typing import Optional, Union
-from aqt.jax.v2 import config
+from MaxText.aqt.jax.v2 import config
 import flax.struct
 import jax
 from jax import lax

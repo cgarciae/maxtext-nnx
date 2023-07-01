@@ -12,10 +12,10 @@
  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  See the License for the specific language governing permissions and
  limitations under the License.
- """
+
+ Training loop and Decoding of the model."""
 
 # pylint: disable=g-bad-todo, abstract-method, consider-using-with, ungrouped-imports
-"""Training loop and Decoding of the model."""
 
 # Calling jax.device_count here prevents a "TPU platform already registered" error.
 # See github.com/google/maxtext/issues/20 for more

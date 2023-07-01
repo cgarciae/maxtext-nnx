@@ -4,7 +4,7 @@ version = "0.1.0"
 description = ""
 authors = ["Your Name <you@example.com>"]
 readme = "README.md"
-packages = [{ include = "maxtext_nnx" }]
+packages = [{ include = "MaxText" }]
 
 [tool.poetry.dependencies]
 python = ">=3.9,<3.12"
@@ -29,6 +29,7 @@ tensorflow-datasets = "^4.9.2"
 tensorboard-plugin-profile = "^2.13.0"
 tensorflow-text = "^2.12.1"
 tensorboardx = "^2.6.1"
+python-box = "^7.0.1"
 
 
 [build-system]
