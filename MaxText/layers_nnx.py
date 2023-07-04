@@ -308,7 +308,7 @@ class MultiHeadDotProductAttention(nnx.Module):
     self.emb_dim = emb_dim
     self.num_heads = num_heads
     self.head_dim = head_dim
-    config = config
+    self.config = config
     self.dtype = dtype
     self.dropout_rate = dropout_rate
     self.kernel_init = kernel_init
@@ -355,10 +355,16 @@ class MultiHeadDotProductAttention(nnx.Module):
     )
 
   def init_cache(self, batch_size: int, seq_len: int):
-    cache_shape = (batch_size, seq_len, self.num_heads, self.head_dim)
+    cache_shape = (batch_size, self.num_heads, self.head_dim, seq_len)
+    index_shape = ()
+    
+    if self.config.scan_layers:
+      cache_shape = (self.config.num_decoder_layers, *cache_shape)
+      index_shape = (self.config.num_decoder_layers,)
+
     self.cached_key = nnx.variable('cache', jnp.zeros(cache_shape, self.dtype))
     self.cached_value = nnx.variable('cache', jnp.zeros(cache_shape, self.dtype))
-    self.cache_index = nnx.variable('cache', jnp.array(0, dtype=jnp.int32))
+    self.cache_index = nnx.variable('cache', jnp.zeros(index_shape, dtype=jnp.int32))
 
   def __call__(
     self,
