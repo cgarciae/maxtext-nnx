@@ -164,17 +164,20 @@ def train_step(config, state, data, dropout_rng):
   aqt_rng, rng2 = jax.random.split(gen_aqt_rng)
 
   def loss_fn(params):
-    logits, intermediate_outputs = state.apply_fn({'params': params},
-                         data['inputs'],
-                         data['targets'],
-                         data['inputs_segmentation'],
-                         data['inputs_position'],
-                         enable_dropout=config.enable_dropout,
-                         rngs={'dropout': rng1, 'aqt': aqt_rng}, mutable='intermediates')
+    logits, (updates, _) = state.apply_fn(params)(
+      data['inputs'],
+      data['targets'],
+      None, # data['inputs_segmentation'],
+      None, # data['inputs_position'],
+      enable_dropout=config.enable_dropout,
+      ctx=nnx.context(dropout=rng1, aqt=gen_aqt_rng),
+      # rngs={'dropout': rng1, 'aqt': aqt_rng}, mutable='intermediates'
+    )
+    intermediate_outputs = updates.filter("intermediates")
     # TODO: is optax xent as good as custom T5X one?
     xent = optax.softmax_cross_entropy_with_integer_labels(logits, data['targets'])
     # Mask out paddings at the end of each example.
-    xent = xent * (data['inputs_segmentation'] != 0)
+    # xent = xent * (data['inputs_segmentation'] != 0)
     # TODO: mask out the prompt if training prefix-LM
     return jnp.sum(xent)/jnp.size(xent), intermediate_outputs
 
@@ -276,15 +279,15 @@ def train_loop(config, state=None):
   mesh = Mesh(devices_array, config.mesh_axes)
 
   # Set up datasets.
-  train_ds, eval_ds = get_datasets(
-      config=config,
-  )
-  train_iter, _, _, _ = preprocess_dataset(
-    config,
-    mesh,
-    train_ds, eval_ds,
-    vocab_path=os.path.join(config.base_output_directory, config.vocab_relative_path),
-  )
+  # train_ds, eval_ds = get_datasets(
+  #     config=config,
+  # )
+  # train_iter, _, _, _ = preprocess_dataset(
+  #   config,
+  #   mesh,
+  #   train_ds, eval_ds,
+  #   vocab_path=os.path.join(config.base_output_directory, config.vocab_relative_path),
+  # )
 
   state, state_mesh_annotations = max_utils.setup_initial_state(
     Transformer, tx, config, init_rng, mesh, checkpoint_manager)
@@ -301,7 +304,7 @@ def train_loop(config, state=None):
                        data_pspec,
                        None),
     out_axis_resources=(state_mesh_annotations, None, None),
-    static_argnums=(0,1,),
+    static_argnums=(0,),
     donate_argnums=2)
 
   example_batch = None
@@ -310,7 +313,11 @@ def train_loop(config, state=None):
   local_metrics_file = open(config.metrics_file, 'a', encoding="utf8") if config.metrics_file else None
 
   for step in np.arange(get_first_step(state), config.steps):
-    example_batch = load_next_batch(train_iter, example_batch, config)
+    # example_batch = load_next_batch(train_iter, example_batch, config)
+    example_batch = {
+      'inputs': jnp.ones((config.per_device_batch_size, config.max_target_length), dtype=jnp.int32),
+      'targets': jnp.ones((config.per_device_batch_size, config.max_target_length), dtype=jnp.int32),
+    }
     with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
       state, metrics, nextrng = p_train_step(
           config, state, example_batch, nextrng

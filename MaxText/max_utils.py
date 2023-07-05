@@ -136,7 +136,10 @@ def unbox_logicallypartioned_trainstate(
   #       else x, boxed_train_state, \
   #       is_leaf=lambda k: isinstance(k, flax.linen.spmd.LogicallyPartitioned))
 
-def init_train_state(model_constructor: Callable[..., nnx.Module], tx, config, key):
+def init_train_state(
+    model_constructor: Callable[..., nnx.Module], tx, config, key,
+    apply_fn=None,
+):
   """
   We pass in "static" objects like model, tx, config as JAX compares them by
   object hash, and instantiating them inside causes pjit top-level annotations
@@ -150,11 +153,13 @@ def init_train_state(model_constructor: Callable[..., nnx.Module], tx, config, k
   # )
   model = model_constructor(config, ctx=nnx.context(key))
   params, moduledef = model.partition("params")
+
   state = TrainState.create(
-    apply_fn=moduledef.apply,
+    apply_fn=apply_fn or moduledef.apply,
     params=params,
     tx=tx,
-    moduledef=moduledef,
+    moduledef=None,
+    # moduledef=moduledef,
   )
   return state
 
@@ -187,18 +192,21 @@ def setup_initial_state(
   # Initialization
   with mesh, nnx.logical_axis_rules(config.logical_axis_rules):
     state_mesh_annotations = nnx.logical_to_mesh(state_logical_annotations)
-    state, raw_params = checkpointing.load_state_if_possible(checkpoint_manager,
-                                                config.load_parameters_path,
-                                                unboxed_abstract_state,
-                                                mesh,
-                                                state_mesh_annotations)
-
+    state = None
+    raw_params = None
+    # state, raw_params = checkpointing.load_state_if_possible(checkpoint_manager,
+    #                                             config.load_parameters_path,
+    #                                             unboxed_abstract_state,
+    #                                             mesh,
+    #                                             state_mesh_annotations)
+    print(state_mesh_annotations)
     if not state:
       state = pjit(
           init_train_state_partial,
           in_axis_resources=None,
-          out_axis_resources=state_mesh_annotations
-      )(rng)
+          out_axis_resources=state_mesh_annotations,
+          static_argnames=["apply_fn"],
+      )(rng, apply_fn=abstract_state.apply_fn)
       if raw_params: # If we loaded a partial state, we need to merge it.
         state = state.replace(params = raw_params)
     raw_params = None
