@@ -17,7 +17,7 @@
 Common Max Utils needed by multiple modules"""
 
 # pylint: disable=bare-except, consider-using-generator
-from typing import Callable
+from typing import Callable, TypeVar
 import checkpointing
 import functools
 
@@ -137,8 +137,7 @@ def unbox_logicallypartioned_trainstate(
   #       is_leaf=lambda k: isinstance(k, flax.linen.spmd.LogicallyPartitioned))
 
 def init_train_state(
-    model_constructor: Callable[..., nnx.Module], tx, config, key,
-    apply_fn=None,
+    moduledef, model_constructor, tx, config, key,
 ):
   """
   We pass in "static" objects like model, tx, config as JAX compares them by
@@ -152,10 +151,10 @@ def init_train_state(
   #     config.max_target_length
   # )
   model = model_constructor(config, ctx=nnx.context(key))
-  params, moduledef = model.partition("params")
+  params, _ = model.partition("params")
 
   state = TrainState.create(
-    apply_fn=apply_fn or moduledef.apply,
+    apply_fn=moduledef.apply,
     params=params,
     tx=tx,
     moduledef=None,
@@ -163,6 +162,12 @@ def init_train_state(
   )
   return state
 
+
+def get_module_def(   
+  model_constructor: Callable[..., nnx.Module], config
+) -> nnx.ModuleDef[nnx.Module]:
+  module = model_constructor(config, ctx=nnx.context(0))
+  return module.get_module_def()
 
 def setup_initial_state(
   model_constructor: Callable[..., nnx.Module], tx, config, 
@@ -183,8 +188,10 @@ def setup_initial_state(
     state: the initialized train state
     state_mesh_annotations: the mesh annotations for the train state
   """
-  init_train_state_partial = functools.partial(init_train_state, model_constructor, tx,
-                                               config)
+  moduledef = jax.eval_shape(lambda: get_module_def(model_constructor, config))
+  init_train_state_partial = functools.partial(
+    init_train_state, moduledef, model_constructor, tx, config
+  )
   abstract_state = jax.eval_shape(init_train_state_partial, rng)
   state_logical_annotations = nnx.get_partition_spec(abstract_state)
   unboxed_abstract_state = unbox_logicallypartioned_trainstate(abstract_state)
@@ -205,8 +212,7 @@ def setup_initial_state(
           init_train_state_partial,
           in_axis_resources=None,
           out_axis_resources=state_mesh_annotations,
-          static_argnames=["apply_fn"],
-      )(rng, apply_fn=abstract_state.apply_fn)
+      )(rng)
       if raw_params: # If we loaded a partial state, we need to merge it.
         state = state.replace(params = raw_params)
     raw_params = None
