@@ -12,10 +12,12 @@
  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  See the License for the specific language governing permissions and
  limitations under the License.
- """
+
+
+Common Max Utils needed by multiple modules"""
 
 # pylint: disable=bare-except, consider-using-generator
-""" Common Max Utils needed by multiple modules"""
+from typing import Callable
 import checkpointing
 import functools
 
@@ -33,9 +35,13 @@ import flax
 from flax.training import train_state
 from flax import linen as nn
 from flax.linen import partitioning as nn_partitioning
+import nnx
+from MaxText import layers_nnx
 
 import optax
 
+class TrainState(train_state.TrainState):
+  moduledef: nnx.ModuleDef[layers_nnx.Transformer]
 
 def l2norm_pytree(x):
   """L2 norm of a pytree of arrays."""
@@ -115,7 +121,7 @@ def create_device_mesh(config):
   return mesh
 
 def unbox_logicallypartioned_trainstate(
-    boxed_train_state: train_state.TrainState):
+    boxed_train_state: TrainState):
   """ Unboxes the flax.LogicallyPartitioned pieces in a train state.
 
     Args:
@@ -124,12 +130,13 @@ def unbox_logicallypartioned_trainstate(
     Returns:
       a TrainState where all all LogicallyPartitioned leaves have been unboxed.
   """
-  return jax.tree_util.tree_map(lambda x: x.unbox() if \
-        isinstance(x, flax.linen.spmd.LogicallyPartitioned) \
-        else x, boxed_train_state, \
-        is_leaf=lambda k: isinstance(k, flax.linen.spmd.LogicallyPartitioned))
+  return boxed_train_state
+  # return jax.tree_util.tree_map(lambda x: x.unbox() if \
+  #       isinstance(x, flax.linen.spmd.LogicallyPartitioned) \
+  #       else x, boxed_train_state, \
+  #       is_leaf=lambda k: isinstance(k, flax.linen.spmd.LogicallyPartitioned))
 
-def init_train_state(model, tx, config, key):
+def init_train_state(model_constructor: Callable[..., nnx.Module], tx, config, key):
   """
   We pass in "static" objects like model, tx, config as JAX compares them by
   object hash, and instantiating them inside causes pjit top-level annotations
@@ -137,21 +144,25 @@ def init_train_state(model, tx, config, key):
 
   Args: model, tx, config, key
   """
-  input_shape = (
-      len(jax.devices()) * config.per_device_batch_size,
-      config.max_target_length
+  # input_shape = (
+  #     len(jax.devices()) * config.per_device_batch_size,
+  #     config.max_target_length
+  # )
+  model = model_constructor(config, ctx=nnx.context(key))
+  params, moduledef = model.partition("params")
+  state = TrainState.create(
+    apply_fn=moduledef.apply,
+    params=params,
+    tx=tx,
+    moduledef=moduledef,
   )
-  model_vars = model.init({'params': key, 'dropout': key, 'aqt': key},
-                          jnp.ones(input_shape),
-                          jnp.ones(input_shape))
-  state = train_state.TrainState.create(
-      apply_fn=model.apply,
-      params=model_vars['params'],
-      tx=tx)
   return state
 
 
-def setup_initial_state(model, tx, config, rng, mesh, checkpoint_manager):
+def setup_initial_state(
+  model_constructor: Callable[..., nnx.Module], tx, config, 
+  rng, mesh, checkpoint_manager
+):
   """ We initialize the model and optimizer state, and optionally load from a
   checkpoint as necessary.
 
@@ -167,15 +178,15 @@ def setup_initial_state(model, tx, config, rng, mesh, checkpoint_manager):
     state: the initialized train state
     state_mesh_annotations: the mesh annotations for the train state
   """
-  init_train_state_partial = functools.partial(init_train_state, model, tx,
+  init_train_state_partial = functools.partial(init_train_state, model_constructor, tx,
                                                config)
   abstract_state = jax.eval_shape(init_train_state_partial, rng)
-  state_logical_annotations = nn.get_partition_spec(abstract_state)
+  state_logical_annotations = nnx.get_partition_spec(abstract_state)
   unboxed_abstract_state = unbox_logicallypartioned_trainstate(abstract_state)
 
   # Initialization
-  with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
-    state_mesh_annotations = nn.logical_to_mesh(state_logical_annotations)
+  with mesh, nnx.logical_axis_rules(config.logical_axis_rules):
+    state_mesh_annotations = nnx.logical_to_mesh(state_logical_annotations)
     state, raw_params = checkpointing.load_state_if_possible(checkpoint_manager,
                                                 config.load_parameters_path,
                                                 unboxed_abstract_state,

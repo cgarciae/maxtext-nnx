@@ -21,6 +21,8 @@
 # See github.com/google/maxtext/issues/20 for more
 import jax
 import os
+
+from MaxText import layers_nnx
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "0"
 print(f"Found {jax.device_count()} devices.")
 
@@ -32,13 +34,9 @@ import numpy as np
 import optax
 from tensorboardX import SummaryWriter
 
-from layers import Transformer
-import pyconfig
-from input_pipeline import get_datasets
-from input_pipeline import preprocess_dataset
-import max_utils
-import temperature_sampler
-import checkpointing
+from MaxText.layers_nnx import Transformer
+from MaxText.input_pipeline import get_datasets, preprocess_dataset
+from MaxText import pyconfig, max_utils, temperature_sampler, checkpointing
 
 import jax.numpy as jnp
 from jax import random
@@ -55,6 +53,8 @@ from cloud_tpu_diagnostics.configuration import stack_trace_configuration
 
 import max_logging
 cc.initialize_cache(os.path.expanduser("~/jax_cache"))
+
+import nnx
 
 # https://arxiv.org/pdf/2204.02311.pdf Appendix B
 def calculate_training_tflops(num_model_parameters, config):
@@ -145,11 +145,10 @@ def record_activation_metrics(output_metrics, intermediate_outputs, config):
       output_metrics['scalar'][f'activ_mean/layer_{layer_num:03d}'] = layer["activation_mean"][0]
       output_metrics['scalar'][f'activ_stdev/layer_{layer_num:03d}'] = layer["activation_stdev"][0]
 
-def train_step(model, config, state, data, dropout_rng):
+def train_step(config, state, data, dropout_rng):
   """
 
   Args:
-    model: A nn.Module
     state: A pytree of the current state of the model
     data: Batch of data to apply to the model
     dropout_rng: A key to use to generate rng for dropout
@@ -165,7 +164,7 @@ def train_step(model, config, state, data, dropout_rng):
   aqt_rng, rng2 = jax.random.split(gen_aqt_rng)
 
   def loss_fn(params):
-    logits, intermediate_outputs = model.apply({'params': params},
+    logits, intermediate_outputs = state.apply_fn({'params': params},
                          data['inputs'],
                          data['targets'],
                          data['inputs_segmentation'],
@@ -191,7 +190,7 @@ def train_step(model, config, state, data, dropout_rng):
 
 
 def predict_step(inputs,
-                 state,
+                 state: max_utils.TrainState,
                  rngkey,
                  model,
                  config):
@@ -199,31 +198,27 @@ def predict_step(inputs,
   # NOTE: why are we adding inputs.shape[2:] here?  it's almost always empty??
   target_shape = (inputs.shape[0], config.max_predict_length) + inputs.shape[2:]
 
-  initial_variables = model.init(
-      jax.random.PRNGKey(0),
-      jnp.ones(target_shape, config.dtype),
-      None,
-      enable_dropout=config.enable_dropout,
-      decode=True,
-      max_decode_length=config.max_predict_length
+  module = state.moduledef.merge(state.params) # type: ignore
+
+  module.for_each(
+    layers_nnx.MultiHeadDotProductAttention,
+    lambda x: x.init_cache(inputs.shape[0], config.max_predict_length),
   )
-  cache = initial_variables["cache"]
+  cache = module.filter("cache")
+  del module
 
   def tokens_ids_to_logits(flat_ids, flat_cache):
     """Token slice to logits from decoder model."""
     # --> [batch * beam, 1, vocab]
-    flat_logits, new_vars = model.apply(
-        {
-            "params": state.params,
-            "cache": flat_cache
-        },
-        flat_ids,
-        None,
-        enable_dropout=config.enable_dropout,
-        decode=True,
-        max_decode_length=config.max_predict_length,
-        mutable=["cache"])
-    new_flat_cache = new_vars["cache"]
+    flat_logits, (updates, _) = state.apply_fn(state.params, flat_cache)(
+      flat_ids,
+      None,
+      enable_dropout=config.enable_dropout,
+      decode=True,
+      max_decode_length=config.max_predict_length,
+      ctx=nnx.context(0),
+    )
+    new_flat_cache = updates.filter("cache")
     # Remove singleton sequence-length dimension:
     # [batch, 1, vocab] --> [batch, vocab]
     flat_logits = flat_logits.squeeze(axis=1)
@@ -261,7 +256,7 @@ def train_loop(config, state=None):
   init_rng, nextrng = random.split(random.PRNGKey(0), 2)
 
   # Model and Optimizer definition
-  model = Transformer(config)
+  # model = Transformer(config)
   learning_rate_schedule = max_utils.create_learning_rate_schedule(
       learning_rate=config.learning_rate, warmup_steps=config.warmup_steps
   )
@@ -291,7 +286,8 @@ def train_loop(config, state=None):
     vocab_path=os.path.join(config.base_output_directory, config.vocab_relative_path),
   )
 
-  state, state_mesh_annotations = max_utils.setup_initial_state(model, tx, config, init_rng, mesh, checkpoint_manager)
+  state, state_mesh_annotations = max_utils.setup_initial_state(
+    Transformer, tx, config, init_rng, mesh, checkpoint_manager)
   data_pspec = P(*config.data_sharding)
 
   num_model_parameters = calculate_num_params_from_pytree(state.params)
@@ -317,7 +313,7 @@ def train_loop(config, state=None):
     example_batch = load_next_batch(train_iter, example_batch, config)
     with mesh, nn_partitioning.axis_rules(config.logical_axis_rules):
       state, metrics, nextrng = p_train_step(
-          model, config, state, example_batch, nextrng
+          config, state, example_batch, nextrng
       )
 
     new_time = datetime.datetime.now()
