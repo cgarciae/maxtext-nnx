@@ -20,7 +20,6 @@ Transformer model definition.
 from MaxText.aqt.jax.v2 import aqt_dot_general as aqt
 from MaxText.aqt.jax.v2 import config as aqt_config
 
-import dataclasses
 import functools
 import operator
 from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
@@ -41,7 +40,7 @@ import jax.numpy as jnp
 
 
 
-withLP = nn.with_logical_partitioning
+withLP = nnx.with_logical_partitioning
 ScanIn = nn_partitioning.ScanIn
 
 Config = Any
@@ -218,14 +217,16 @@ class DenseGeneral(nnx.Module):
     kernel_in_axis = np.arange(len(axis))
     kernel_out_axis = np.arange(len(axis), len(axis) + len(features_out))
     self.kernel = nnx.param(
-      self.kernel_init(
+      withLP(
+        self.kernel_init,
+        sharding=self.kernel_axes,
+      )(
         ctx.make_rng('params'),
         kernel_shape,
         jnp.float32,
         kernel_in_axis,
         kernel_out_axis,
-      ),
-      sharding=self.kernel_axes,
+      )
     )
 
   def __call__(self, inputs: Array, *, ctx: nnx.Context) -> Array:
@@ -633,12 +634,14 @@ class LayerNorm(nnx.Module):
     self.scale_init = scale_init
     
     self.scale = nnx.param(
-      self.scale_init(
+      withLP(
+        self.scale_init,
+        sharding=self.kernel_axes,
+      )(
         ctx.make_rng('params'),
         (features,), 
         jnp.float32
-      ),
-      sharding=self.kernel_axes,
+      )
     )
 
   def __call__(self, x: jax.Array) -> jax.Array:
@@ -682,12 +685,14 @@ class Embed(nnx.Module):
     self.embedding_init = embedding_init
 
     self.embedding = nnx.param(
-      self.embedding_init(
+      withLP(
+        self.embedding_init,
+        sharding=('vocab', 'embed'),
+      )(
         ctx.make_rng('params'),
         (self.num_embeddings, self.features),
         jnp.float32
       ),
-      sharding=('vocab', 'embed'),
     )
 
   def __call__(self, inputs: Array) -> Array:
@@ -753,12 +758,14 @@ class RelativePositionBiases(nnx.Module):
     self.dtype = dtype
     self.embedding_init = embedding_init
     self.rel_embedding = nnx.param(
-      self.embedding_init(
+      withLP(
+        self.embedding_init,
+        sharding=('heads', 'relpos_buckets'),
+      )(
         ctx.make_rng('params'),
         (self.num_heads, self.num_buckets),
         jnp.float32,
       ),
-      sharding=('heads', 'relpos_buckets'),
     )
 
   @staticmethod
@@ -1097,7 +1104,7 @@ class DecoderLayer(nnx.Module):
       max_distance=128,
       num_heads=config.num_heads,
       dtype=config.dtype,
-      embedding_init=nn.initializers.variance_scaling(
+      embedding_init=nnx.initializers.variance_scaling(
         1.0, 'fan_avg', 'uniform'
       ),
       ctx=ctx,
@@ -1133,7 +1140,7 @@ class DecoderLayer(nnx.Module):
     l = max_decode_length if decode and max_decode_length else inputs.shape[-2]
     decoder_bias = self.relpos_bias(l, l, False)
 
-    inputs = nn.with_logical_constraint(inputs, ('activation_batch', 'activation_length', 'activation_embed'))
+    inputs = nnx.with_logical_constraint(inputs, ('activation_batch', 'activation_length', 'activation_embed'))
 
     # inputs: embedded inputs to the decoder with shape [batch, length, emb_dim]
     lnx = self.pre_self_attention_layer_norm(inputs)
