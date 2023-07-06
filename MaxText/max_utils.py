@@ -206,7 +206,6 @@ def setup_initial_state(
     #                                             unboxed_abstract_state,
     #                                             mesh,
     #                                             state_mesh_annotations)
-    print(state_mesh_annotations)
     if not state:
       state = pjit(
           init_train_state_partial,

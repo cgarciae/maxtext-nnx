@@ -28,6 +28,7 @@ from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
 from flax import linen as nn
 from flax.linen import partitioning as nn_partitioning
 import nnx
+import nnx.nn.linear
 
 import numpy as np
 
@@ -412,13 +413,13 @@ class MultiHeadDotProductAttention(nnx.Module):
     key = self.key(inputs_kv, ctx=ctx)
     value = self.value(inputs_kv, ctx=ctx)
 
-    query = nn.with_logical_constraint(
+    query = nnx.with_logical_constraint(
         query, ('activation_batch', 'activation_length', 'activation_heads', 'activation_kv')
     )
     query = checkpoint_name(query, 'query_proj')
-    key = nn.with_logical_constraint(key, ('activation_batch', 'activation_length', 'activation_heads', 'activation_kv'))
+    key = nnx.with_logical_constraint(key, ('activation_batch', 'activation_length', 'activation_heads', 'activation_kv'))
     key = checkpoint_name(key, 'key_proj')
-    value = nn.with_logical_constraint(
+    value = nnx.with_logical_constraint(
         value, ('activation_batch', 'activation_length', 'activation_heads', 'activation_kv')
     )
     value = checkpoint_name(value, 'value_proj')
@@ -604,7 +605,7 @@ class MlpBlock(nnx.Module):
     x = functools.reduce(operator.mul, activations)
     # Apply dropout and final dense output projection.
     x = self.dropout(x, deterministic=deterministic)  # Broadcast along length.
-    x = nn.with_logical_constraint(x, ('activation_batch', 'activation_length', 'activation_mlp'))
+    x = nnx.with_logical_constraint(x, ('activation_batch', 'activation_length', 'activation_mlp'))
     output = self.wo(x, ctx=ctx)
     return output
 
@@ -710,7 +711,7 @@ class Embed(nnx.Module):
     if not jnp.issubdtype(inputs.dtype, jnp.integer):
       raise ValueError('Input type must be an integer or unsigned integer.')
     output = jnp.asarray(self.embedding, self.dtype)[inputs]
-    output = nn.with_logical_constraint(output, ('activation_batch', 'activation_length', 'activation_embed'))
+    output = nnx.with_logical_constraint(output, ('activation_batch', 'activation_length', 'activation_embed'))
     return output
 
   def attend(self, query: Array) -> Array:
@@ -748,7 +749,7 @@ class RelativePositionBiases(nnx.Module):
     max_distance: int,
     num_heads: int,
     dtype: Any,
-    embedding_init: Callable[..., Array] = nn.linear.default_embed_init,
+    embedding_init: Callable[..., Array] = nnx.nn.linear.default_embed_init,
     *,
     ctx: nnx.Context,
   ):
@@ -1144,7 +1145,7 @@ class DecoderLayer(nnx.Module):
 
     # inputs: embedded inputs to the decoder with shape [batch, length, emb_dim]
     lnx = self.pre_self_attention_layer_norm(inputs)
-    lnx = nn.with_logical_constraint(lnx, ('activation_batch', 'activation_length', 'activation_embed'))
+    lnx = nnx.with_logical_constraint(lnx, ('activation_batch', 'activation_length', 'activation_embed'))
 
     # Self-attention block
     attention_lnx = self.self_attention(
@@ -1156,11 +1157,11 @@ class DecoderLayer(nnx.Module):
       decode=decode,
       ctx=ctx,
     )
-    attention_lnx = nn.with_logical_constraint(attention_lnx, ('activation_batch', 'activation_length', 'activation_embed'))
+    attention_lnx = nnx.with_logical_constraint(attention_lnx, ('activation_batch', 'activation_length', 'activation_embed'))
 
     # MLP block.
     mlp_lnx = self.mlp(lnx, deterministic=deterministic, ctx=ctx)
-    mlp_lnx = nn.with_logical_constraint(mlp_lnx, ('activation_batch', 'activation_length', 'activation_embed'))
+    mlp_lnx = nnx.with_logical_constraint(mlp_lnx, ('activation_batch', 'activation_length', 'activation_embed'))
 
     next_layer_addition = mlp_lnx + attention_lnx
 
@@ -1169,7 +1170,7 @@ class DecoderLayer(nnx.Module):
     )
 
     layer_output = next_layer_addition_dropped_out + inputs
-    layer_output = nn.with_logical_constraint(layer_output, ('activation_batch', 'activation_length', 'activation_embed'))
+    layer_output = nnx.with_logical_constraint(layer_output, ('activation_batch', 'activation_length', 'activation_embed'))
 
     if config.record_internal_nn_metrics:
       self.sow('intermediates', 'activation_mean', jnp.mean(layer_output))
@@ -1234,7 +1235,7 @@ class Decoder(nnx.Module):
         },
         # in_axes=(nn.broadcast, nn.broadcast, nn.broadcast, nn.broadcast),
         length=config.num_decoder_layers,
-        metadata_params={nn.PARTITION_NAME: 'layers'}
+        metadata_params={nnx.PARTITION_NAME: 'layers'}
       )(config, ctx=ctx)
     else:
       self.layers = nnx.Sequence(
@@ -1291,7 +1292,7 @@ class Decoder(nnx.Module):
     else:
       assert self.logits_dense is not None
       logits = self.logits_dense(y, ctx=ctx)
-    logits = nn.with_logical_constraint(logits, ('activation_batch', 'activation_length', 'activation_vocab'))
+    logits = nnx.with_logical_constraint(logits, ('activation_batch', 'activation_length', 'activation_vocab'))
     return logits
 
 
@@ -1311,7 +1312,7 @@ class Transformer(nnx.Module):
       features=config.emb_dim,
       dtype=config.dtype,
       attend_dtype=jnp.float32,  # for logit training stability
-      embedding_init=nn.initializers.normal(stddev=1.0),
+      embedding_init=nnx.initializers.normal(stddev=1.0),
       ctx=ctx,
     )
     self.decoder = Decoder(
