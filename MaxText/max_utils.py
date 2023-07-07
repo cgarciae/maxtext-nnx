@@ -137,7 +137,7 @@ def unbox_logicallypartioned_trainstate(
   #       is_leaf=lambda k: isinstance(k, flax.linen.spmd.LogicallyPartitioned))
 
 def init_train_state(
-    moduledef, model_constructor, tx, config, key,
+  model_constructor, tx, config, key
 ):
   """
   We pass in "static" objects like model, tx, config as JAX compares them by
@@ -151,7 +151,7 @@ def init_train_state(
   #     config.max_target_length
   # )
   model = model_constructor(config, ctx=nnx.context(key))
-  params, _ = model.partition("params")
+  params, moduledef = model.partition("params")
 
   state = TrainState.create(
     apply_fn=moduledef.apply,
@@ -160,6 +160,9 @@ def init_train_state(
     moduledef=None,
     # moduledef=moduledef,
   )
+  state = state.replace(step=jnp.asarray(state.step))
+  state_spec = nnx.logical_to_mesh(nnx.get_partition_spec(state))
+  state = jax.lax.with_sharding_constraint(state, state_spec)
   return state
 
 
@@ -188,35 +191,19 @@ def setup_initial_state(
     state: the initialized train state
     state_mesh_annotations: the mesh annotations for the train state
   """
-  moduledef = jax.eval_shape(lambda: get_module_def(model_constructor, config))
-  init_train_state_partial = functools.partial(
-    init_train_state, moduledef, model_constructor, tx, config
-  )
-  abstract_state = jax.eval_shape(init_train_state_partial, rng)
-  state_logical_annotations = nnx.get_partition_spec(abstract_state)
-  unboxed_abstract_state = unbox_logicallypartioned_trainstate(abstract_state)
-
   # Initialization
   with mesh, nnx.logical_axis_rules(config.logical_axis_rules):
-    state_mesh_annotations = nnx.logical_to_mesh(state_logical_annotations)
-    state = None
-    raw_params = None
-    # state, raw_params = checkpointing.load_state_if_possible(checkpoint_manager,
-    #                                             config.load_parameters_path,
-    #                                             unboxed_abstract_state,
-    #                                             mesh,
-    #                                             state_mesh_annotations)
-    if not state:
-      state = pjit(
-          init_train_state_partial,
-          in_axis_resources=None,
-          out_axis_resources=state_mesh_annotations,
-      )(rng)
-      if raw_params: # If we loaded a partial state, we need to merge it.
-        state = state.replace(params = raw_params)
-    raw_params = None
-
-  state = unbox_logicallypartioned_trainstate(state)
+    # state, raw_params = checkpointing.load_state_if_possible(
+    #   checkpoint_manager,
+    #   config.load_parameters_path,
+    #   unboxed_abstract_state,
+    #   mesh,
+    #   state_mesh_annotations
+    # )
+    state = jax.jit(init_train_state, static_argnums=(0, 1, 2))(
+      model_constructor, tx, config, rng
+    )
+    state_mesh_annotations = nnx.logical_to_mesh(nnx.get_partition_spec(state))
   return state, state_mesh_annotations
 
 
