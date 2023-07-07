@@ -305,7 +305,7 @@ def train_loop(config, state=None):
                        None),
     out_axis_resources=(state_mesh_annotations, None, None),
     static_argnums=(0,),
-    donate_argnums=2)
+    donate_argnums=1)
 
   example_batch = None
   last_step_completion = datetime.datetime.now()
