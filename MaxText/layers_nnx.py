@@ -217,7 +217,7 @@ class DenseGeneral(nnx.Module):
     kernel_shape = features_in + features_out
     kernel_in_axis = np.arange(len(axis))
     kernel_out_axis = np.arange(len(axis), len(axis) + len(features_out))
-    self.kernel = nnx.param(
+    self.kernel = nnx.Param(
       withLP(
         self.kernel_init,
         sharding=self.kernel_axes,
@@ -364,9 +364,9 @@ class MultiHeadDotProductAttention(nnx.Module):
       cache_shape = (self.config.num_decoder_layers, *cache_shape)
       index_shape = (self.config.num_decoder_layers,)
 
-    self.cached_key = nnx.variable('cache', jnp.zeros(cache_shape, self.dtype))
-    self.cached_value = nnx.variable('cache', jnp.zeros(cache_shape, self.dtype))
-    self.cache_index = nnx.variable('cache', jnp.zeros(index_shape, dtype=jnp.int32))
+    self.cached_key = nnx.Cache(jnp.zeros(cache_shape, self.dtype))
+    self.cached_value = nnx.Cache(jnp.zeros(cache_shape, self.dtype))
+    self.cache_index = nnx.Cache(jnp.zeros(index_shape, dtype=jnp.int32))
 
   def __call__(
     self,
@@ -634,7 +634,7 @@ class LayerNorm(nnx.Module):
     self.kernel_axes = kernel_axes
     self.scale_init = scale_init
     
-    self.scale = nnx.param(
+    self.scale = nnx.Param(
       withLP(
         self.scale_init,
         sharding=self.kernel_axes,
@@ -685,7 +685,7 @@ class Embed(nnx.Module):
     self.attend_dtype = attend_dtype
     self.embedding_init = embedding_init
 
-    self.embedding = nnx.param(
+    self.embedding = nnx.Param(
       withLP(
         self.embedding_init,
         sharding=('vocab', 'embed'),
@@ -758,7 +758,7 @@ class RelativePositionBiases(nnx.Module):
     self.num_heads = num_heads
     self.dtype = dtype
     self.embedding_init = embedding_init
-    self.rel_embedding = nnx.param(
+    self.rel_embedding = nnx.Param(
       withLP(
         self.embedding_init,
         sharding=('heads', 'relpos_buckets'),
@@ -1173,9 +1173,9 @@ class DecoderLayer(nnx.Module):
     layer_output = nnx.with_logical_constraint(layer_output, ('activation_batch', 'activation_length', 'activation_embed'))
 
     if config.record_internal_nn_metrics:
-      self.sow('intermediates', 'activation_mean', jnp.mean(layer_output))
-      self.sow('intermediates', 'activation_stdev', jnp.std(layer_output))
-      self.sow('intermediates', 'activation_fraction_zero', jnp.sum(layer_output==0) / jnp.size(layer_output))
+      self.sow(nnx.Intermediate, 'activation_mean', jnp.mean(layer_output))
+      self.sow(nnx.Intermediate, 'activation_stdev', jnp.std(layer_output))
+      self.sow(nnx.Intermediate, 'activation_fraction_zero', jnp.sum(layer_output==0) / jnp.size(layer_output))
     
     return layer_output, None
 
@@ -1213,7 +1213,7 @@ class Decoder(nnx.Module):
         assert config.remat_policy == 'full', "Remat policy needs to be on list of remat policies"
         policy = None
 
-      BlockLayer = nnx.remat(
+      BlockLayer = nnx.Remat(
         BlockLayer, 
         policy=policy,
         prevent_cse=not config.scan_layers,
@@ -1221,12 +1221,12 @@ class Decoder(nnx.Module):
       )
 
     if config.scan_layers:
-      self.layers = nnx.scan(
+      self.layers = nnx.Scan(
         BlockLayer,
         variable_axes={
-          'params': params_spec,
-          'cache': cache_spec,
-          'intermediates': 0
+          nnx.Param: params_spec,
+          nnx.Cache: cache_spec,
+          nnx.Intermediate: 0
         },
         split_rngs={
           'params': True,
@@ -1237,6 +1237,7 @@ class Decoder(nnx.Module):
         length=config.num_decoder_layers,
         metadata_params={nnx.PARTITION_NAME: 'layers'}
       )(config, ctx=ctx)
+
     else:
       self.layers = nnx.Sequence(
         BlockLayer(config, ctx=ctx)

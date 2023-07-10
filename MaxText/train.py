@@ -173,7 +173,7 @@ def train_step(config, state, data, dropout_rng):
       ctx=nnx.context(dropout=rng1, aqt=gen_aqt_rng),
       # rngs={'dropout': rng1, 'aqt': aqt_rng}, mutable='intermediates'
     )
-    intermediate_outputs = updates.filter("intermediates")
+    intermediate_outputs = updates.filter(nnx.Intermediate)
     # TODO: is optax xent as good as custom T5X one?
     xent = optax.softmax_cross_entropy_with_integer_labels(logits, data['targets'])
     # Mask out paddings at the end of each example.
@@ -207,7 +207,7 @@ def predict_step(inputs,
     layers_nnx.MultiHeadDotProductAttention,
     lambda x: x.init_cache(inputs.shape[0], config.max_predict_length),
   )
-  cache = module.filter("cache")
+  cache = module.filter(nnx.Cache)
   del module
 
   def tokens_ids_to_logits(flat_ids, flat_cache):
@@ -221,7 +221,7 @@ def predict_step(inputs,
       max_decode_length=config.max_predict_length,
       ctx=nnx.context(0),
     )
-    new_flat_cache = updates.filter("cache")
+    new_flat_cache = updates.filter(nnx.Cache)
     # Remove singleton sequence-length dimension:
     # [batch, 1, vocab] --> [batch, vocab]
     flat_logits = flat_logits.squeeze(axis=1)

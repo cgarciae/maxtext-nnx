@@ -151,7 +151,7 @@ def init_train_state(
   #     config.max_target_length
   # )
   model = model_constructor(config, ctx=nnx.context(key))
-  params, moduledef = model.partition("params")
+  params, moduledef = model.partition(nnx.Param)
 
   state = TrainState.create(
     apply_fn=moduledef.apply,
@@ -166,11 +166,6 @@ def init_train_state(
   return state
 
 
-def get_module_def(   
-  model_constructor: Callable[..., nnx.Module], config
-) -> nnx.ModuleDef[nnx.Module]:
-  module = model_constructor(config, ctx=nnx.context(0))
-  return module.get_module_def()
 
 def setup_initial_state(
   model_constructor: Callable[..., nnx.Module], tx, config, 

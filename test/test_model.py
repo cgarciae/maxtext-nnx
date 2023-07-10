@@ -59,7 +59,7 @@ del variables
 
 # init nnx
 module_nnx = layers_nnx.Transformer(config, ctx=nnx.context(0))
-nnx_params = module_nnx.filter("params")
+nnx_params = module_nnx.filter(nnx.Param)
 
 assert len(flat_params_flax) == len(nnx_params)
 
@@ -125,7 +125,7 @@ y_nnx = module_nnx(
 np.testing.assert_allclose(y_flax, y_nnx, rtol=1e-3, atol=1e-3)
 
 #------------------
-# test encoding
+# test dencoding
 #------------------
 seq_len = 10
 
@@ -145,7 +145,7 @@ module_nnx.for_each(
     layers_nnx.MultiHeadDotProductAttention, 
     lambda x: x.init_cache(1, seq_len)
 )
-cache_nnx = module_nnx.filter("cache")
+cache_nnx = module_nnx.filter(nnx.Cache)
 
 # flax -> nnx
 assert flat_cache_flax["decoder/decoder/self_attention/cache_index"].shape == cache_nnx["decoder/layers/scan_module/remat_module/self_attention/cache_index"].value.shape
@@ -177,20 +177,16 @@ y_nnx = module_nnx(
     decode=True,
     ctx=nnx.context(0),
 )
-cache_nnx = module_nnx.filter("cache")
+cache_nnx = module_nnx.filter(nnx.Cache)
 
 np.testing.assert_allclose(y_flax, y_nnx, rtol=1e-3, atol=1e-3)
 
 # np.testing.assert_allclose refuses to work for bfloat16
 # so we are calculating the difference manually
-assert np.sqrt(
-    (
-        (
-            flat_cache_flax["decoder/decoder/self_attention/cache_index"] -
-            cache_nnx["decoder/layers/scan_module/remat_module/self_attention/cache_index"].value
-        ) ** 2
-    ).sum()
-) < 1e-3
+assert jnp.allclose(
+    flat_cache_flax["decoder/decoder/self_attention/cache_index"],
+    cache_nnx["decoder/layers/scan_module/remat_module/self_attention/cache_index"].value
+)
 assert np.sqrt(
     (
         (
