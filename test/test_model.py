@@ -1,9 +1,8 @@
-import dataclasses
 from typing import Any
 
 import jax
 import jax.numpy as jnp
-import nnx
+from flax.experimental import nnx
 import numpy as np
 import yaml
 from flax import traverse_util

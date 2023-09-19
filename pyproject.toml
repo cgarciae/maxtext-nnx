@@ -8,14 +8,13 @@ packages = [{ include = "MaxText" }]
 
 [tool.poetry.dependencies]
 python = ">=3.9,<3.12"
-nnx = { path = "../nnx", develop = true }
 orbax-checkpoint = "^0.2.6"
 absl-py = "^1.4.0"
 argparse = "^1.4.0"
 cloud-tpu-diagnostics = "^0.1.1"
 datetime = "^5.1"
 google-cloud-storage = "^2.10.0"
-flax = "^0.6.11"
+flax = { git = "https://github.com/google/flax.git", branch = "nnx" }
 ml-collections = "^0.1.1"
 numpy = "^1.25.0"
 optax = "^0.1.5"

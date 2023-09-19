@@ -25,10 +25,8 @@ import operator
 from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
 
 
-from flax import linen as nn
 from flax.linen import partitioning as nn_partitioning
-import nnx
-import nnx.nn.linear
+from flax.experimental import nnx
 
 import numpy as np
 
@@ -37,8 +35,6 @@ from jax import lax
 from jax import random
 from jax.ad_checkpoint import checkpoint_name
 import jax.numpy as jnp
-
-
 
 
 withLP = nnx.with_logical_partitioning
@@ -749,7 +745,7 @@ class RelativePositionBiases(nnx.Module):
     max_distance: int,
     num_heads: int,
     dtype: Any,
-    embedding_init: Callable[..., Array] = nnx.nn.linear.default_embed_init,
+    embedding_init: Callable[..., Array] = default_embed_init,
     *,
     ctx: nnx.Context,
   ):

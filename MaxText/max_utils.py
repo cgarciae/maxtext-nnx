@@ -28,20 +28,12 @@ import jax
 import jax.numpy as jnp
 from jax.experimental import mesh_utils
 
-from jax.experimental.pjit import pjit
-
 import json
-import flax
-from flax.training import train_state
-from flax import linen as nn
-from flax.linen import partitioning as nn_partitioning
-import nnx
+from flax.training.train_state import TrainState
+from flax.experimental import nnx
 from MaxText import layers_nnx
 
 import optax
-
-class TrainState(train_state.TrainState):
-  moduledef: nnx.ModuleDef[layers_nnx.Transformer]
 
 def l2norm_pytree(x):
   """L2 norm of a pytree of arrays."""
@@ -157,8 +149,6 @@ def init_train_state(
     apply_fn=moduledef.apply,
     params=params,
     tx=tx,
-    moduledef=None,
-    # moduledef=moduledef,
   )
   state = state.replace(step=jnp.asarray(state.step))
   state_spec = nnx.logical_to_mesh(nnx.get_partition_spec(state))

@@ -54,7 +54,7 @@ from cloud_tpu_diagnostics.configuration import stack_trace_configuration
 import max_logging
 cc.initialize_cache(os.path.expanduser("~/jax_cache"))
 
-import nnx
+from flax.experimental import nnx
 
 # https://arxiv.org/pdf/2204.02311.pdf Appendix B
 def calculate_training_tflops(num_model_parameters, config):
